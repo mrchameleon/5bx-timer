@@ -1,0 +1,9 @@
+{
+  "voice": true,
+  "phases": [
+    { "name": "Get Ready",   "kind": "prep", "seconds": 6 },
+    { "name": "Round 1",     "kind": "work", "seconds": 6 },
+    { "name": "Cooldown",    "kind": "rest", "seconds": 6 },
+    { "name": "Final Round", "kind": "work", "seconds": 6 }
+  ]
+}

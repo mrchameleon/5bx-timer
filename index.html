@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interval Timer</title>
+<style>
+  :root {
+    --idle: #15171a;
+    --prep: #8a5300;
+    --work: #b3261e;
+    --rest: #1d5ba3;
+    --done: #1e7a3c;
+    --bg: var(--idle);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden;
+    transition: background-color .5s ease;
+  }
+  body.prep { --bg: var(--prep); }
+  body.work { --bg: var(--work); }
+  body.rest { --bg: var(--rest); }
+  body.done { --bg: var(--done); }
+  [hidden] { display: none !important; }
+
+  /* ---------- start screen ---------- */
+  #start {
+    height: 100%; display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .card { width: min(560px, 100%); }
+  .card h1 { font-size: 2.2rem; margin: 0 0 .25rem; }
+  .card .sub { opacity: .65; margin: 0 0 1.5rem; }
+  .plan { list-style: none; padding: 0; margin: 0 0 1.5rem; border-top: 1px solid #ffffff22; }
+  .plan li {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .55rem 0; border-bottom: 1px solid #ffffff22; font-size: 1.05rem;
+  }
+  .plan .dot { width: .7rem; height: .7rem; border-radius: 50%; flex: none; }
+  .plan .dur { margin-left: auto; font-variant-numeric: tabular-nums; opacity: .8; }
+  .plan .total { font-weight: 600; }
+  .controls { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; align-items: center; margin-bottom: 1.5rem; opacity: .9; }
+  .controls label { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+  .buttons { display: flex; gap: .75rem; }
+  button {
+    font: inherit; color: #fff; border: 0; border-radius: 10px; cursor: pointer;
+    padding: .9rem 1.4rem; background: #ffffff1f;
+  }
+  button:hover { background: #ffffff33; }
+  button.primary { background: var(--work); font-size: 1.25rem; font-weight: 700; flex: 1; }
+  button.primary:hover { filter: brightness(1.15); }
+  .error { background: #b3261e44; border: 1px solid #b3261e; padding: 1rem; border-radius: 10px; }
+
+  /* ---------- running screen ---------- */
+  #run {
+    height: 100%; display: grid; grid-template-rows: auto 1fr auto;
+    padding: 3vh 4vw;
+  }
+  .top { display: flex; justify-content: space-between; font-size: max(16px, 3vh); opacity: .85; font-variant-numeric: tabular-nums; }
+  .center { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; }
+  .kind { font-size: max(18px, 4vh); letter-spacing: .3em; text-transform: uppercase; opacity: .85; font-weight: 600; }
+  .name { font-size: max(28px, 8vh); font-weight: 800; margin-top: .5vh; text-align: center; }
+  .clock {
+    font-size: min(40vw, 58vh); line-height: 1; font-weight: 800;
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+  }
+  .clock.urgent { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+  .bar { width: min(90vw, 1400px); height: 1.4vh; min-height: 8px; background: #ffffff33; border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: #fff; }
+  .bottom { text-align: center; }
+  .next { font-size: max(18px, 4.5vh); font-weight: 600; }
+  .next .lbl { opacity: .7; font-weight: 400; }
+  .keys { margin-top: 1.2vh; font-size: max(12px, 1.8vh); opacity: .55; }
+  kbd { border: 1px solid #ffffff66; border-radius: 4px; padding: 0 .35em; font-family: inherit; }
+
+  body.paused .clock, body.paused .bar { opacity: .3; }
+  #pausedTag {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 12vh; font-weight: 900; letter-spacing: .2em; pointer-events: none;
+  }
+
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  #flash.go { animation: flash .7s ease-out; }
+  @keyframes flash { 0% { opacity: .85; } 100% { opacity: 0; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .clock.urgent, #flash.go { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<section id="start">
+  <div class="card">
+    <h1>Interval Timer</h1>
+    <p class="sub">Starts with a 30-second get-ready countdown. Sound and voice cues play at every change.</p>
+    <div id="loadError" class="error" hidden></div>
+    <ul class="plan" id="plan"></ul>
+    <div class="controls">
+      <label><input type="checkbox" id="voiceToggle"> Voice announcements</label>
+      <label>Volume <input type="range" id="volume" min="0" max="1" step="0.05"></label>
+    </div>
+    <div class="buttons">
+      <button class="primary" id="startBtn" disabled>Start</button>
+      <button id="testBtn" title="Play each sound once">Test sounds</button>
+    </div>
+  </div>
+</section>
+
+<section id="run" hidden>
+  <div class="top">
+    <span id="step"></span>
+    <span id="totalLeft"></span>
+  </div>
+  <div class="center">
+    <div class="kind" id="kind"></div>
+    <div class="name" id="name"></div>
+    <div class="clock" id="clock">0:00</div>
+    <div class="bar"><div id="barFill"></div></div>
+  </div>
+  <div class="bottom">
+    <div class="next" id="next"></div>
+    <div class="keys">
+      <kbd>Space</kbd> pause · <kbd>→</kbd> skip · <kbd>←</kbd> back · <kbd>M</kbd> mute · <kbd>F</kbd> fullscreen · <kbd>Esc</kbd> quit to menu
+    </div>
+  </div>
+  <div id="pausedTag" hidden>PAUSED</div>
+</section>
+
+<div id="flash"></div>
+
+<script>
+// ============================================================
+// SOUNDS: edit these to customize.
+// Each note: f = pitch (Hz), t = start offset (s), d = length (s),
+//            type = 'square' | 'sine' | 'triangle' | 'sawtooth', v = volume 0..1
+// ============================================================
+const beeps = (n, f, on, off, type = 'square', v = 0.9) =>
+  Array.from({ length: n }, (_, i) => ({ f, t: i * (on + off), d: on, type, v }));
+
+const SOUNDS = {
+  tick:      [{ f: 880, t: 0, d: 0.09, type: 'sine', v: 0.7 }],                 // final seconds of each phase
+  prepTone:  [{ f: 523, t: 0, d: 0.3, type: 'sine', v: 0.6 }],                  // every 5s while getting ready
+  warn:      [{ f: 660, t: 0, d: 0.12 }, { f: 660, t: 0.2, d: 0.12 }],          // 10s before a work period
+  go:        [{ f: 660, t: 0, d: 0.15 }, { f: 880, t: 0.18, d: 0.15 }, { f: 1320, t: 0.36, d: 0.5 }],
+  workEnd:   beeps(6, 1000, 0.18, 0.12),                                        // the loud BEEPS
+  restStart: [{ f: 784, t: 0, d: 0.3, type: 'triangle' }, { f: 523, t: 0.3, d: 0.6, type: 'triangle' }],
+  done:      [
+    ...[523, 659, 784, 1047].map((f, i) => ({ f, t: i * 0.15, d: 0.15, type: 'triangle' })),
+    { f: 1047, t: 0.65, d: 1.2, type: 'triangle' },
+  ],
+};
+
+// Count-down ticks start this many seconds before a phase ends.
+const TICK_FROM = { prep: 5, work: 3, rest: 5 };
+const KIND_LABEL = { prep: 'Get ready', work: 'Work', rest: 'Cooldown' };
+
+// ============================================================
+// Audio
+// ============================================================
+let ctx, master;
+let volume = 1, muted = false;
+
+function initAudio() {
+  if (ctx) { ctx.resume(); return; }
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  master = ctx.createGain();
+  const comp = ctx.createDynamicsCompressor();   // stops overlapping notes clipping
+  master.connect(comp).connect(ctx.destination);
+  applyVolume();
+}
+function applyVolume() { if (master) master.gain.value = muted ? 0 : volume; }
+
+// Plays a named sound `delay` seconds from now. Returns its length in seconds.
+function play(name, delay = 0) {
+  const notes = SOUNDS[name];
+  if (!ctx || !notes) return 0;
+  const t0 = ctx.currentTime + delay + 0.02;
+  let end = 0;
+  for (const n of notes) {
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    const v = n.v ?? 0.8, s = t0 + n.t, e = s + n.d;
+    osc.type = n.type || 'square';
+    osc.frequency.value = n.f;
+    g.gain.setValueAtTime(0, s);
+    g.gain.linearRampToValueAtTime(v, s + 0.005);      // short ramps avoid clicks
+    g.gain.setValueAtTime(v, e - 0.01);
+    g.gain.linearRampToValueAtTime(0, e);
+    osc.connect(g).connect(master);
+    osc.start(s); osc.stop(e + 0.02);
+    end = Math.max(end, n.t + n.d);
+  }
+  return end;
+}
+
+let speechTimer;
+function say(text, delay = 0) {
+  if (!voiceOn || muted || !('speechSynthesis' in window)) return;
+  clearTimeout(speechTimer);
+  speechTimer = setTimeout(() => {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.volume = volume;
+    speechSynthesis.speak(u);
+  }, delay * 1000);
+}
+function stopSpeech() {
+  clearTimeout(speechTimer);
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+}
+
+// ============================================================
+// Formatting
+// ============================================================
+const fmt = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+function spoken(s) {
+  const m = Math.floor(s / 60), r = s % 60, parts = [];
+  if (m) parts.push(`${m} minute${m > 1 ? 's' : ''}`);
+  if (r) parts.push(`${r} second${r > 1 ? 's' : ''}`);
+  return parts.join(' ');
+}
+
+// ============================================================
+// Timer state
+// ============================================================
+let phases = [], voiceOn = true;
+let idx = -1;          // current phase index
+let endAt = 0;         // performance.now() when the current phase ends
+let pausedLeft = null; // ms left when paused, else null
+let lastSec = null;    // last whole second shown, so per-second cues fire once
+let loop = null, wakeLock = null;
+
+const $ = id => document.getElementById(id);
+const now = () => performance.now();
+const cur = () => phases[idx];
+const nextPhase = () => phases[idx + 1];
+const msLeft = () => pausedLeft ?? Math.max(0, endAt - now());
+
+function start() {
+  initAudio();
+  $('start').hidden = true;
+  $('run').hidden = false;
+  document.documentElement.requestFullscreen?.().catch(() => {});
+  requestWakeLock();
+  clearInterval(loop);
+  loop = setInterval(update, 50);
+  enterPhase(0, { at: now(), auto: false });
+}
+
+function quitToMenu() {
+  clearInterval(loop); loop = null;
+  stopSpeech();
+  idx = -1; pausedLeft = null;
+  wakeLock?.release().catch(() => {}); wakeLock = null;
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  document.body.className = '';
+  document.title = 'Interval Timer';
+  $('run').hidden = true;
+  $('start').hidden = false;
+  $('startBtn').textContent = 'Start';
+}
+
+// at:   when this phase began (lets back-to-back transitions stay drift-free)
+// auto: true when the previous phase ran out, false for skip/back/start
+function enterPhase(i, { at, auto }) {
+  const prev = phases[i - 1];
+  stopSpeech();
+
+  // Sound for the phase that just ended
+  let delay = 0;
+  if (auto && prev?.kind === 'work') delay = play('workEnd') + 0.25;
+
+  if (i >= phases.length) return finish(delay);
+
+  idx = i;
+  const p = cur(), nx = nextPhase();
+  endAt = at + p.seconds * 1000;
+  if (pausedLeft !== null) pausedLeft = p.seconds * 1000;
+  lastSec = p.seconds;
+
+  // Sound + voice for the phase that's starting
+  const cue = { prep: 'prepTone', work: 'go', rest: 'restStart' }[p.kind];
+  const cueLen = play(cue, delay);
+  const after = delay + cueLen + 0.1;
+  if (p.kind === 'prep') {
+    say(`Get ready. ${nx ? nx.name + ' starts' : 'Starting'} in ${spoken(p.seconds)}.`, after);
+  } else if (p.kind === 'work') {
+    say(`${p.name}. ${spoken(p.seconds)}. ${nx ? 'Go!' : 'Last one. Go!'}`, after);
+  } else {
+    say(`${p.name}. ${spoken(p.seconds)}.${nx ? ` Next up: ${nx.name}.` : ''}`, after);
+  }
+
+  flash();
+  document.body.className = p.kind + (pausedLeft !== null ? ' paused' : '');
+  $('kind').textContent = KIND_LABEL[p.kind];
+  $('name').textContent = p.name;
+  $('step').textContent = `Step ${i + 1} of ${phases.length}`;
+  $('next').innerHTML = nx
+    ? `<span class="lbl">Up next:</span> ${escapeHTML(nx.name)} · ${fmt(nx.seconds)}`
+    : `<span class="lbl">Last one — finish strong</span>`;
+  render();
+}
+
+function finish(delay) {
+  clearInterval(loop); loop = null;
+  idx = phases.length;
+  play('done', delay);
+  say('All done. Great work.', delay + 2);
+  flash();
+  document.body.className = 'done';
+  $('kind').textContent = 'Complete';
+  $('name').textContent = 'All done';
+  $('clock').textContent = '0:00';
+  $('clock').classList.remove('urgent');
+  $('barFill').style.width = '100%';
+  $('step').textContent = `${phases.length} of ${phases.length}`;
+  $('totalLeft').textContent = '';
+  $('next').innerHTML = `<span class="lbl">Press</span> Esc <span class="lbl">for the menu</span>`;
+  document.title = 'Done · Interval Timer';
+}
+
+function update() {
+  if (idx < 0 || idx >= phases.length) return;
+  const left = msLeft();
+  if (left <= 0 && pausedLeft === null) {
+    // Carry the exact end time forward so a late tick (e.g. background tab) doesn't add drift.
+    return enterPhase(idx + 1, { at: endAt, auto: true });
+  }
+  const sec = Math.ceil(left / 1000);
+  if (sec !== lastSec) { lastSec = sec; onSecond(sec); }
+  render();
+}
+
+// Cues that fire once as each new second appears on the clock
+function onSecond(sec) {
+  const p = cur(), nx = nextPhase();
+  if (sec <= TICK_FROM[p.kind] && sec >= 1) { play('tick'); return; }
+  if (sec === 10 && nx?.kind === 'work' && p.seconds > 15) {
+    play('warn');
+    say(`${nx.name} in 10 seconds.`, 0.4);
+    return;
+  }
+  if (p.kind === 'prep' && sec % 5 === 0) play('prepTone');
+}
+
+function render() {
+  const p = cur(), left = msLeft();
+  const sec = Math.ceil(left / 1000);
+  const clock = $('clock');
+  clock.textContent = fmt(sec);
+  clock.classList.toggle('urgent', sec <= 5 && pausedLeft === null);
+  $('barFill').style.width = `${(1 - left / (p.seconds * 1000)) * 100}%`;
+  const rest = phases.slice(idx + 1).reduce((a, q) => a + q.seconds, 0);
+  $('totalLeft').textContent = `${fmt(sec + rest)} total left`;
+  document.title = `${fmt(sec)} · ${p.name}`;
+}
+
+function togglePause() {
+  if (idx < 0 || idx >= phases.length) return;
+  if (pausedLeft === null) {
+    pausedLeft = Math.max(0, endAt - now());
+    stopSpeech();
+  } else {
+    endAt = now() + pausedLeft;
+    pausedLeft = null;
+  }
+  document.body.classList.toggle('paused', pausedLeft !== null);
+  $('pausedTag').hidden = pausedLeft === null;
+  render();
+}
+
+function skip(dir) {
+  if (idx < 0) return;
+  if (idx >= phases.length) {            // from the done screen, ← goes back into the last phase
+    if (dir > 0) return;
+    loop = setInterval(update, 50);
+    return enterPhase(phases.length - 1, { at: now(), auto: false });
+  }
+  let target = idx + dir;
+  // ← restarts the current phase unless you're within its first 3 seconds
+  if (dir < 0 && cur().seconds * 1000 - msLeft() > 3000) target = idx;
+  if (target < 0) target = 0;
+  enterPhase(target, { at: now(), auto: false });
+}
+
+function flash() {
+  const f = $('flash');
+  f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
+}
+
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* not supported; ignore */ }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && loop) requestWakeLock();
+});
+
+const escapeHTML = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ============================================================
+// Keyboard
+// ============================================================
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const running = !$('run').hidden;
+  if (!running) {
+    if (e.key === 'Enter' && !$('startBtn').disabled) { e.preventDefault(); start(); }
+    return;
+  }
+  switch (e.key) {
+    case ' ': e.preventDefault(); togglePause(); break;
+    case 'ArrowRight': skip(+1); break;
+    case 'ArrowLeft': skip(-1); break;
+    case 'm': case 'M':
+      muted = !muted; applyVolume(); if (muted) stopSpeech(); break;
+    case 'f': case 'F':
+      document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
+      break;
+    case 'Escape':
+      // In fullscreen the browser uses Esc to exit fullscreen first; a second Esc quits.
+      if (!document.fullscreenElement) quitToMenu();
+      break;
+  }
+});
+
+// ============================================================
+// Start screen
+// ============================================================
+function load(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } }
+function save(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* storage unavailable */ } }
+
+volume = load('volume', 1);
+$('volume').value = volume;
+$('volume').addEventListener('input', e => { volume = +e.target.value; save('volume', volume); applyVolume(); });
+$('voiceToggle').addEventListener('change', e => { voiceOn = e.target.checked; save('voice', voiceOn); });
+$('startBtn').addEventListener('click', start);
+$('testBtn').addEventListener('click', () => {
+  initAudio();
+  let t = 0;
+  for (const name of ['tick', 'prepTone', 'warn', 'go', 'workEnd', 'restStart', 'done']) t += play(name, t) + 0.5;
+  say('This is the voice.', t);
+});
+
+fetch('schedule.json')
+  .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then(s => {
+    phases = s.phases;
+    voiceOn = load('voice', s.voice !== false);
+    $('voiceToggle').checked = voiceOn;
+    const colors = { prep: 'var(--prep)', work: 'var(--work)', rest: 'var(--rest)' };
+    const total = phases.reduce((a, p) => a + p.seconds, 0);
+    $('plan').innerHTML = phases.map(p =>
+      `<li><span class="dot" style="background:${colors[p.kind]}"></span>${escapeHTML(p.name)}<span class="dur">${fmt(p.seconds)}</span></li>`
+    ).join('') + `<li class="total">Total<span class="dur">${fmt(total)}</span></li>`;
+    $('startBtn').disabled = false;
+    $('startBtn').focus();
+  })
+  .catch(err => {
+    $('loadError').hidden = false;
+    $('loadError').textContent = `Couldn't load the schedule (${err.message}). Start the timer with "go run ." in the timer folder, not by opening index.html directly.`;
+  });
+</script>
+</body>
+</html>

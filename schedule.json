@@ -1,0 +1,15 @@
+{
+  "voice": true,
+  "phases": [
+    { "name": "Get Ready",      "kind": "prep", "seconds": 30 },
+    { "name": "Round 1",        "kind": "work", "seconds": 120 },
+    { "name": "Cooldown",       "kind": "rest", "seconds": 120 },
+    { "name": "Round 2",        "kind": "work", "seconds": 60 },
+    { "name": "Cooldown",       "kind": "rest", "seconds": 120 },
+    { "name": "Round 3",        "kind": "work", "seconds": 60 },
+    { "name": "Cooldown",       "kind": "rest", "seconds": 120 },
+    { "name": "Round 4",        "kind": "work", "seconds": 60 },
+    { "name": "Long Cooldown",  "kind": "rest", "seconds": 240 },
+    { "name": "Final Round",    "kind": "work", "seconds": 360 }
+  ]
+}
