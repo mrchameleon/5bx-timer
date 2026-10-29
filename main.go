@@ -3,8 +3,9 @@
 //	go run .                      # default schedule
 //	go run . -schedule my.json    # custom schedule
 //
-// Settings and "where you left off" are saved to state.json in the user config
-// dir (e.g. ~/Library/Application Support/interval-timer on macOS).
+// Settings and "where you left off" are saved to state.json, and a log of every
+// session to history.json, both in the user config dir
+// (e.g. ~/Library/Application Support/interval-timer on macOS).
 package main
 
 import (
@@ -12,9 +13,11 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -68,7 +71,10 @@ func main() {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(schedJSON)
 	})
-	mux.HandleFunc("/state", stateHandler(statePath()))
+	dir := dataDir()
+	mux.HandleFunc("/state", stateHandler(filepath.Join(dir, "state.json")))
+	historyPath := filepath.Join(dir, "history.json")
+	mux.HandleFunc("/history", historyHandler(historyPath))
 
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil {
@@ -82,6 +88,7 @@ func main() {
 		total += p.Seconds
 	}
 	fmt.Printf("Timer running at %s  (%d phases, %d:%02d total)\n", url, len(sched.Phases), total/60, total%60)
+	fmt.Printf("Session history: %s\n", historyPath)
 	fmt.Println("Press Ctrl+C to quit.")
 
 	if !*noOpen {
@@ -132,14 +139,14 @@ func loadSchedule(path string) (*Schedule, error) {
 	return &s, nil
 }
 
-// statePath is where the browser's settings and progress are kept. They can't live in
-// localStorage: the port changes between runs, and each port gets its own storage.
-func statePath() string {
+// dataDir is where the browser's settings, progress and history are kept. They can't live
+// in localStorage: the port changes between runs, and each port gets its own storage.
+func dataDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		dir = "."
 	}
-	return filepath.Join(dir, "interval-timer", "state.json")
+	return filepath.Join(dir, "interval-timer")
 }
 
 // stateHandler stores one small JSON object for the page: GET reads it, PUT replaces it.
@@ -172,6 +179,92 @@ func stateHandler(path string) http.HandlerFunc {
 		default:
 			w.Header().Set("Allow", "GET, PUT")
 			http.Error(w, "use GET or PUT", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+// historyHandler keeps the session log: a JSON array of session objects, oldest first.
+// GET lists it, POST adds a session (replacing one with the same "id", so the page can
+// safely resend), and DELETE ?id=... removes one.
+func historyHandler(path string) http.HandlerFunc {
+	var mu sync.Mutex
+	read := func() ([]json.RawMessage, error) {
+		b, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return []json.RawMessage{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var list []json.RawMessage
+		if err := json.Unmarshal(b, &list); err != nil {
+			return nil, fmt.Errorf("%s isn't a JSON array (%v); fix or move it, and history will start working again", path, err)
+		}
+		return list, nil
+	}
+	write := func(list []json.RawMessage) error {
+		b, err := json.MarshalIndent(list, "", "  ")
+		if err != nil {
+			return err
+		}
+		return writeFileAtomic(path, append(b, '\n'))
+	}
+	idOf := func(raw json.RawMessage) string {
+		var v struct {
+			ID string `json:"id"`
+		}
+		json.Unmarshal(raw, &v)
+		return v.ID
+	}
+	without := func(list []json.RawMessage, id string) []json.RawMessage {
+		out := list[:0]
+		for _, raw := range list {
+			if idOf(raw) != id {
+				out = append(out, raw)
+			}
+		}
+		return out
+	}
+	fail := func(w http.ResponseWriter, err error) {
+		log.Printf("history: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		list, err := read()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			json.NewEncoder(w).Encode(list)
+		case http.MethodPost:
+			b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+			var obj map[string]json.RawMessage
+			if err != nil || json.Unmarshal(b, &obj) != nil || idOf(b) == "" {
+				http.Error(w, "a session must be a JSON object under 64 KB with an \"id\"", http.StatusBadRequest)
+				return
+			}
+			if err := write(append(without(list, idOf(b)), b)); err != nil {
+				fail(w, err)
+			}
+		case http.MethodDelete:
+			id := r.URL.Query().Get("id")
+			kept := without(list, id)
+			if id == "" || len(kept) == len(list) {
+				http.Error(w, "no session with that id", http.StatusNotFound)
+				return
+			}
+			if err := write(kept); err != nil {
+				fail(w, err)
+			}
+		default:
+			w.Header().Set("Allow", "GET, POST, DELETE")
+			http.Error(w, "use GET, POST or DELETE", http.StatusMethodNotAllowed)
 		}
 	}
 }

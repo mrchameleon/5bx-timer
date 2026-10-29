@@ -11,6 +11,7 @@
     --work: #b3261e;
     --rest: #1d5ba3;
     --done: #1e7a3c;
+    --ended: #3a4048;
     --bg: var(--idle);
   }
   * { box-sizing: border-box; }
@@ -26,6 +27,7 @@
   body.work { --bg: var(--work); }
   body.rest { --bg: var(--rest); }
   body.done { --bg: var(--done); }
+  body.ended { --bg: var(--ended); }
   [hidden] { display: none !important; }
 
   /* ---------- start screen ---------- */
@@ -51,6 +53,10 @@
     font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
     background: #fff; color: var(--idle); border-radius: 99px; padding: .1rem .5rem;
   }
+  .plan .adj { margin-left: auto; display: flex; align-items: center; gap: .4rem; }
+  .plan .adj .dur { margin-left: 0; min-width: 2.8em; text-align: center; }
+  .plan .adj button { padding: 0; width: 1.9rem; height: 1.9rem; border-radius: 6px; line-height: 1; }
+  .plan .dur.changed { font-weight: 700; opacity: 1; }
   .hint { margin: -1rem 0 1.5rem; font-size: .85rem; opacity: .5; }
   .modes { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin-bottom: 1.25rem; }
   .modes label {
@@ -79,6 +85,33 @@
   button.primary { background: var(--work); font-size: 1.25rem; font-weight: 700; flex: 1; }
   button.primary:hover { filter: brightness(1.15); }
   .error { background: #b3261e44; border: 1px solid #b3261e; padding: 1rem; border-radius: 10px; }
+
+  /* ---------- history ---------- */
+  .history { margin-top: 2.5rem; }
+  .history h2 { font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; opacity: .6; margin: 0 0 .5rem; }
+  .history ol { list-style: none; padding: 0; margin: 0; border-top: 1px solid #ffffff22; }
+  .history li { border-bottom: 1px solid #ffffff22; }
+  .history summary {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .75rem;
+    padding: .55rem .25rem; cursor: pointer; list-style: none;
+  }
+  .history summary::-webkit-details-marker { display: none; }
+  .history summary:hover { background: #ffffff0d; }
+  .history summary:focus-visible { outline: 2px solid #fff; outline-offset: 2px; border-radius: 4px; }
+  .history .rounds { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .history .rounds b { font-size: 1.1rem; }
+  .tag { min-width: 7.2em; text-align: center; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; border-radius: 99px; padding: .1rem .5rem; background: #ffffff22; }
+  .tag.completed { background: var(--done); }
+  .tag.gave_up { background: var(--prep); }
+  .history table { width: 100%; border-collapse: collapse; font-size: .9rem; font-variant-numeric: tabular-nums; margin: .1rem 0 .5rem; }
+  .history td { padding: .2rem .75rem .2rem .25rem; }
+  .history td:last-child { padding-right: .25rem; text-align: right; }
+  .history tr.restrow td { opacity: .6; }
+  .history .meta { display: flex; flex-wrap: wrap; gap: .25rem 1rem; justify-content: space-between; font-size: .85rem; opacity: .65; padding: 0 .25rem .75rem; }
+
+  .giveup { margin-top: 1.5vh; background: none; border: 1px solid #ffffff55; font-size: max(13px, 1.8vh); padding: .4em 1.2em; opacity: .75; }
+  .giveup:hover { opacity: 1; }
+  .giveup.armed { background: #fff; color: var(--work); opacity: 1; font-weight: 700; }
 
   /* ---------- running screen ---------- */
   #run {
@@ -137,7 +170,7 @@
       <button type="button" class="link" id="resumeBtn"></button>
     </div>
     <ul class="plan" id="plan"></ul>
-    <p class="hint">Click a round to start from it.</p>
+    <p class="hint" id="hint"></p>
     <div class="controls">
       <label><input type="checkbox" id="voiceToggle"> Voice announcements</label>
       <label>Volume <input type="range" id="volume" min="0" max="1" step="0.05"></label>
@@ -146,6 +179,11 @@
       <button class="primary" id="startBtn" disabled>Start</button>
       <button id="testBtn" title="Play each sound once">Test sounds</button>
     </div>
+    <section class="history" id="history" hidden>
+      <h2>History</h2>
+      <div id="historyError" class="error" hidden></div>
+      <ol id="historyList"></ol>
+    </section>
   </div>
 </section>
 
@@ -167,8 +205,9 @@
       <div class="keys"><kbd>Enter</kbd> start next round · <kbd>Esc</kbd> menu (your place is saved)</div>
     </div>
     <div class="keys" id="keys">
-      <kbd>Space</kbd> pause · <kbd>→</kbd> skip · <kbd>←</kbd> back · <kbd>M</kbd> mute · <kbd>F</kbd> fullscreen · <kbd>Esc</kbd> quit to menu
+      <kbd>Space</kbd> pause · <kbd>→</kbd> skip · <kbd>←</kbd> back · <kbd>M</kbd> mute · <kbd>F</kbd> fullscreen · <kbd>G</kbd> give up · <kbd>Esc</kbd> quit to menu
     </div>
+    <button class="giveup" id="giveUpBtn" hidden>Give up</button>
   </div>
   <div id="pausedTag" hidden>PAUSED</div>
 </section>
@@ -269,7 +308,8 @@ function spoken(s) {
 // ============================================================
 // Timer state
 // ============================================================
-let schedule = [], scheduleId = '', voiceOn = true;
+let base = [];         // the schedule's phases as loaded
+let schedule = [], scheduleId = '', voiceOn = true;   // schedule = base with your rest-time changes applied
 let works = [];        // schedule indexes of the work phases ("rounds")
 let mode = 'full';     // 'full': whole schedule with timed rests · 'round': one round, then an open-ended break
 let startAt = 0;       // schedule index of the round to start from
@@ -280,6 +320,7 @@ let endAt = 0;         // performance.now() when the current phase ends
 let pausedLeft = null; // ms left when paused, else null
 let lastSec = null;    // last whole second shown, so per-second cues fire once
 let loop = null, wakeLock = null;
+let sess = null;       // the session being recorded for the history log (see "Session log")
 
 const $ = id => document.getElementById(id);
 const now = () => performance.now();
@@ -315,8 +356,10 @@ function savedProgress() {
   return p && p.schedule === scheduleId && works.includes(p.next) ? p : null;
 }
 
-function start() {
+// continuing: true when one-round-at-a-time mode moves on from a break, so it's the same session
+function start(continuing = false) {
   initAudio();
+  if (!continuing || !sess) beginSession();
   phases = buildRun();
   brk = null; idx = -1; pausedLeft = null;
   $('start').hidden = true;
@@ -333,10 +376,16 @@ function start() {
 
 function startNextRound() {
   startAt = brk.next;
-  start();
+  start(true);
 }
 
 function quitToMenu() {
+  if (sess) {
+    if (!sess.outcome && cur()?.kind === 'work') closeRound('stopped');
+    logSession(sess);
+    sess = null;
+    save('current', null);
+  }
   clearInterval(loop); loop = null;
   stopSpeech();
   idx = -1; pausedLeft = null; brk = null;
@@ -348,6 +397,7 @@ function quitToMenu() {
   $('start').hidden = false;
   startAt = savedProgress()?.next ?? works[0];
   renderMenu();
+  renderHistory();
   $('startBtn').focus();
 }
 
@@ -357,6 +407,11 @@ function enterPhase(i, { at, auto }) {
   const prev = phases[i - 1];
   stopSpeech();
   if (i === idx + 1 && cur()?.kind === 'work') recordDone(cur().si);
+  if (cur()?.kind === 'work') {
+    // Leaving a round forward finishes it; going back means this attempt doesn't count
+    if (i > idx) closeRound(auto ? 'done' : 'skipped');
+    else dropRound(cur().si);
+  }
 
   // Sound for the phase that just ended
   let delay = 0;
@@ -369,6 +424,8 @@ function enterPhase(i, { at, auto }) {
   endAt = at + p.seconds * 1000;
   if (pausedLeft !== null) pausedLeft = p.seconds * 1000;
   lastSec = p.seconds;
+  if (p.kind === 'work') beginRound(p);
+  updateGiveUp();
 
   // Sound + voice for the phase that's starting
   // In round-at-a-time mode every round ends its session; only the schedule's last round is "the last one"
@@ -403,29 +460,76 @@ function finish(delay) {
   const nx = last.kind === 'work' ? nextWork(last.si) : undefined;
   if (mode === 'round' && nx !== undefined) return takeBreak(last.si, nx, delay);
 
-  clearInterval(loop); loop = null;
-  idx = phases.length;
+  endSession('completed');
   play('done', delay);
   say('All done. Great work.', delay + 2);
   flash();
-  document.body.className = 'done';
-  $('kind').textContent = 'Complete';
-  $('name').textContent = 'All done';
-  $('clock').textContent = '0:00';
+  showEnd();
+}
+
+// Two presses within 3 seconds, so a stray click or key can't end your session.
+let giveUpArmed = 0, giveUpTimer;
+function giveUp() {
+  if (!sess || sess.outcome) return;
+  if (Date.now() - giveUpArmed > 3000) {
+    giveUpArmed = Date.now();
+    $('giveUpBtn').textContent = 'Press again to give up';
+    $('giveUpBtn').classList.add('armed');
+    clearTimeout(giveUpTimer);
+    giveUpTimer = setTimeout(updateGiveUp, 3000);
+    return;
+  }
+  giveUpArmed = 0;
+  if (cur()?.kind === 'work') closeRound('gave_up');
+  if (!sess.rounds.length) return quitToMenu();   // nothing done yet, so nothing to log
+  stopSpeech();
+  endSession('gave_up');
+  save('progress', null);   // giving up ends the day: next time starts from the first round
+  play('restStart');
+  say('Session saved. Good effort.', 1);
+  showEnd();
+}
+
+function updateGiveUp() {
+  clearTimeout(giveUpTimer);
+  giveUpArmed = 0;
+  $('giveUpBtn').textContent = 'Give up';
+  $('giveUpBtn').classList.remove('armed');
+  $('giveUpBtn').hidden = !sess || !!sess.outcome;
+}
+
+// The screen after the last round, or after giving up
+function showEnd() {
+  clearInterval(loop); loop = null;
+  idx = phases.length; brk = null; pausedLeft = null;
+  const rounds = sess?.rounds ?? [], last = rounds.at(-1);
+  const done = rounds.filter(r => r.result === 'done').length;
+  const gaveUp = sess?.outcome === 'gave_up';
+  document.body.className = gaveUp ? 'ended' : 'done';
+  $('kind').textContent = gaveUp ? 'Session over' : 'Complete';
+  $('name').textContent = !gaveUp ? 'All done'
+    : last?.result === 'gave_up' ? `Gave up in ${last.name}` : `Gave up after ${last?.name}`;
+  $('clock').textContent = `${done}/${works.length}`;
   $('clock').classList.remove('urgent');
-  $('barFill').style.width = '100%';
-  $('step').textContent = `${phases.length} of ${phases.length}`;
-  $('totalLeft').textContent = '';
-  $('next').innerHTML = `<span class="lbl">Press</span> Esc <span class="lbl">for the menu</span>`;
-  document.title = 'Done · Interval Timer';
+  $('barFill').style.width = `${(done / works.length) * 100}%`;
+  $('step').textContent = `${done} of ${works.length} rounds done`;
+  $('totalLeft').textContent = sess ? `${fmt(secs(sess.endedAt - sess.startedAt))} session` : '';
+  $('next').innerHTML = `<span class="lbl">Saved to history · press</span> Esc <span class="lbl">for the menu</span>`;
+  $('keys').hidden = true;
+  $('breakKeys').hidden = true;
+  $('pausedTag').hidden = true;
+  updateGiveUp();
+  document.title = `${gaveUp ? 'Session over' : 'Done'} · Interval Timer`;
 }
 
 // Open-ended rest between rounds: the clock counts up, and the next round waits for you.
 function takeBreak(doneSi, nextSi, delay) {
   idx = phases.length;
   const done = schedule[doneSi], nx = schedule[nextSi];
-  // The schedule's own cooldowns between these rounds, shown as a suggestion
-  const suggest = schedule.slice(doneSi + 1, nextSi).reduce((a, p) => a + (p.kind === 'rest' ? p.seconds : 0), 0);
+  // The schedule's own cooldowns between these rounds, shown as a suggestion. The next round
+  // opens with a get-ready countdown, which is rest too, so the chime comes that much earlier.
+  const rest = plannedRest(doneSi, nextSi), prep = prepPhase().seconds;
+  const suggest = Math.max(0, rest - prep);
   brk = { next: nextSi, from: now(), suggest, chimed: suggest === 0 };
 
   play('restStart', delay);
@@ -436,11 +540,12 @@ function takeBreak(doneSi, nextSi, delay) {
   $('name').textContent = `${done.name} done`;
   $('clock').classList.remove('urgent');
   $('step').textContent = `Round ${roundNo(doneSi)} of ${works.length} done`;
-  $('totalLeft').textContent = suggest ? `Suggested rest ${fmt(suggest)}` : '';
+  $('totalLeft').textContent = suggest ? `Planned rest ${fmt(rest)} · includes ${fmt(prep)} get-ready` : '';
   $('next').innerHTML = `<span class="lbl">Up next:</span> ${escapeHTML(nx.name)} · ${fmt(nx.seconds)}`;
   $('nextRoundBtn').textContent = `Start ${nx.name}`;
   $('keys').hidden = true;
   $('breakKeys').hidden = false;
+  updateGiveUp();
   renderBreak();
 }
 
@@ -452,7 +557,7 @@ function renderBreak() {
   if (!brk.chimed && s >= brk.suggest) {
     brk.chimed = true;
     play('prepTone');
-    say(`Suggested rest is up. Start ${schedule[brk.next].name} when you're ready.`, 0.5);
+    say(`Time to get ready. Start ${schedule[brk.next].name} when you're ready.`, 0.5);
   }
 }
 
@@ -495,13 +600,17 @@ function render() {
 
 function togglePause() {
   if (idx < 0 || idx >= phases.length) return;
+  const r = cur().kind === 'work' ? openRound() : null;
   if (pausedLeft === null) {
     pausedLeft = Math.max(0, endAt - now());
     stopSpeech();
+    if (r) r.pausedAt = Date.now();
   } else {
     endAt = now() + pausedLeft;
     pausedLeft = null;
+    if (r) unpause(r);
   }
+  touch();
   document.body.classList.toggle('paused', pausedLeft !== null);
   $('pausedTag').hidden = pausedLeft === null;
   render();
@@ -511,7 +620,8 @@ function skip(dir) {
   if (idx < 0) return;
   if (brk && dir > 0) return startNextRound();
   if (idx >= phases.length) {            // from the done/break screen, ← goes back into the last phase
-    if (dir > 0) return;
+    if (dir > 0 || sess?.outcome === 'gave_up') return;
+    if (sess) { delete sess.outcome; delete sess.endedAt; }   // the session is back on; it's re-logged when it ends
     brk = null;
     $('keys').hidden = false;
     $('breakKeys').hidden = true;
@@ -542,6 +652,100 @@ document.addEventListener('visibilitychange', () => {
 const escapeHTML = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ============================================================
+// Session log: what you actually did, kept in history.json by the Go server (see /history).
+// A session runs from Start until the last round ends, you give up, or you quit to the menu.
+// In one-round-at-a-time mode it carries on across the breaks.
+// The live session is also kept in state ("current"), so closing the tab mid-session still logs it.
+// ============================================================
+const secs = ms => Math.max(0, Math.round(ms / 1000));
+const touch = () => { if (sess) save('current', sess); };
+const openRound = () => { const r = sess?.rounds.at(-1); return r && !r.result ? r : null; };
+const plannedRest = (fromSi, toSi) =>
+  schedule.slice(fromSi + 1, toSi).reduce((a, p) => a + (p.kind === 'rest' ? p.seconds : 0), 0);
+
+function beginSession() {
+  sess = { id: new Date().toISOString(), startedAt: Date.now(), mode, roundsTotal: works.length, rounds: [] };
+  touch();
+}
+
+function endSession(outcome) {
+  sess.outcome = outcome;
+  sess.endedAt = Date.now();
+  touch();
+  logSession(sess);
+}
+
+function beginRound(p) {
+  if (!sess) return;
+  sess.rounds = sess.rounds.filter(r => r.si < p.si);   // redoing a round replaces it and anything after
+  const prev = sess.rounds.at(-1);
+  const r = { si: p.si, round: roundNo(p.si), name: p.name, plannedSec: p.seconds, startedAt: Date.now() };
+  // Rest = from the end of the last round to the start of this one, however it was spent
+  if (prev?.endedAt && nextWork(prev.si) === p.si) {
+    r.rest = { plannedSec: plannedRest(prev.si, p.si), actualSec: secs(r.startedAt - prev.endedAt) };
+  }
+  if (pausedLeft !== null) r.pausedAt = r.startedAt;
+  sess.rounds.push(r);
+  touch();
+}
+
+// result: 'done' (time ran out) · 'skipped' (→ with time left) · 'gave_up' · 'stopped' (quit or closed)
+// Call while the round is still the current phase, so msLeft() is its time left.
+function closeRound(result) {
+  const r = openRound();
+  if (!r) return;
+  r.endedAt = Date.now();
+  r.workedSec = secs(r.plannedSec * 1000 - msLeft());
+  unpause(r);
+  r.result = result;
+  touch();
+}
+
+function unpause(r) {
+  if (!r.pausedAt) return;
+  r.pausedSec = (r.pausedSec || 0) + secs(Date.now() - r.pausedAt);
+  delete r.pausedAt;
+}
+
+function dropRound(si) {
+  if (!sess) return;
+  sess.rounds = sess.rounds.filter(r => r.si !== si);
+  touch();
+}
+
+// Queues a copy of the session in state ("unsaved") and sends it; it stays queued until the
+// server has it. Sending the same session again replaces the earlier copy.
+function logSession(s) {
+  if (!s.rounds.length) return;   // quit during the first get-ready: nothing happened
+  const entry = structuredClone(s);
+  entry.outcome ??= 'stopped';
+  entry.endedAt ??= Date.now();
+  const open = entry.rounds.at(-1);
+  if (!open.result) { open.result = 'stopped'; delete open.pausedAt; }   // tab closed mid-round
+  entry.v = Date.now();
+  save('unsaved', [...load('unsaved', []).filter(u => u.id !== entry.id), entry]);
+  sendUnsaved();
+}
+
+function sendUnsaved() {
+  for (const s of load('unsaved', [])) {
+    fetch('history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s), keepalive: true })
+      .then(r => {
+        if (!r.ok) throw new Error();
+        save('unsaved', load('unsaved', []).filter(u => !(u.id === s.id && u.v === s.v)));
+        logged = [...logged.filter(h => h.id !== s.id), s];
+        if (!$('start').hidden) renderHistory();
+      })
+      .catch(() => { /* stays queued; retried next time the page loads */ });
+  }
+}
+
+addEventListener('pagehide', () => {
+  if (sess && !sess.outcome && cur()?.kind === 'work') closeRound('stopped');
+  flushState();
+});
+
+// ============================================================
 // Keyboard
 // ============================================================
 document.addEventListener('keydown', e => {
@@ -557,6 +761,7 @@ document.addEventListener('keydown', e => {
     case ' ': e.preventDefault(); togglePause(); break;
     case 'ArrowRight': skip(+1); break;
     case 'ArrowLeft': skip(-1); break;
+    case 'g': case 'G': giveUp(); break;
     case 'm': case 'M':
       muted = !muted; applyVolume(); if (muted) stopSpeech(); break;
     case 'f': case 'F':
@@ -587,7 +792,6 @@ function flushState() {
   fetch('state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state), keepalive: true })
     .catch(() => { /* server gone; nothing useful to do */ });
 }
-addEventListener('pagehide', flushState);
 
 function when(ms) {
   const d = new Date(ms), today = new Date();
@@ -598,6 +802,82 @@ function when(ms) {
   return `on ${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`;
 }
 
+// Rest and get-ready times you've changed with − / +, by schedule index. Rounds keep the schedule's time.
+const REST_STEP = 15, REST_MIN = 15;
+function customRest() {
+  const c = load('restTimes', null);
+  return c?.schedule === scheduleId ? c.seconds : {};
+}
+function applyRestTimes() {
+  const c = customRest();
+  schedule = base.map((p, si) => p.kind !== 'work' && c[si] ? { ...p, seconds: c[si] } : p);
+}
+function adjustRest(si, delta) {
+  const c = { ...customRest() };
+  const s = Math.max(REST_MIN, schedule[si].seconds + delta);
+  if (s === base[si].seconds) delete c[si]; else c[si] = s;
+  save('restTimes', { schedule: scheduleId, seconds: c });
+  applyRestTimes();
+  renderMenu();
+}
+
+let logged = [];   // sessions the server has in history.json
+const RESULT = { done: '✓', skipped: 'Skipped', gave_up: 'Gave up', stopped: 'Stopped' };
+const OUTCOME = { completed: 'Completed', gave_up: 'Gave up', stopped: 'Stopped' };
+const signed = s => (s < 0 ? '−' : '+') + fmt(Math.abs(s));
+
+function dateLabel(ms) {
+  const d = new Date(ms);
+  const date = d.toLocaleDateString([], {
+    weekday: 'short', month: 'short', day: 'numeric',
+    year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+  });
+  return `${date} · ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+function renderHistory() {
+  const unsaved = load('unsaved', []).filter(u => !logged.some(h => h.id === u.id));
+  const list = [...logged, ...unsaved].sort((a, b) => b.startedAt - a.startedAt);
+  $('history').hidden = !list.length && $('historyError').hidden;
+  $('historyList').innerHTML = list.map(s => {
+    const done = s.rounds.filter(r => r.result === 'done').length;
+    const worked = s.rounds.reduce((a, r) => a + (r.workedSec ?? 0), 0);
+    const paused = s.rounds.reduce((a, r) => a + (r.pausedSec ?? 0), 0);
+    const rows = s.rounds.map(r => (r.rest
+      ? `<tr class="restrow"><td>Rest</td><td>${fmt(r.rest.actualSec)}</td><td>${fmt(r.rest.plannedSec)} planned</td>`
+        + `<td>${r.rest.actualSec === r.rest.plannedSec ? '' : signed(r.rest.actualSec - r.rest.plannedSec)}</td></tr>`
+      : '')
+      + `<tr><td>${escapeHTML(r.name)}</td><td>${r.workedSec == null ? '—' : fmt(r.workedSec)}</td>`
+      + `<td>of ${fmt(r.plannedSec)}${r.pausedSec ? ` · paused ${fmt(r.pausedSec)}` : ''}</td>`
+      + `<td>${RESULT[r.result] ?? ''}</td></tr>`).join('');
+    const first = s.rounds[0];
+    const meta = [
+      s.mode === 'round' ? 'One round at a time' : 'Full session',
+      first && first.round !== 1 ? `started at ${escapeHTML(first.name)}` : '',
+      `${fmt(worked)} work${paused ? ` · ${fmt(paused)} paused` : ''} · ${fmt(secs(s.endedAt - s.startedAt))} total`,
+    ].filter(Boolean).join(' · ');
+    return `<li><details><summary>
+        <span>${dateLabel(s.startedAt)}</span>
+        <span class="rounds"><b>${done}</b>/${s.roundsTotal} rounds</span>
+        <span class="tag ${s.outcome}">${OUTCOME[s.outcome] ?? s.outcome}</span>
+      </summary>
+      <table>${rows}</table>
+      <div class="meta"><span>${meta}</span>${logged.some(h => h.id === s.id)
+        ? `<button type="button" class="link" data-del="${escapeHTML(s.id)}">Delete</button>` : '<span>Not saved yet</span>'}</div>
+    </details></li>`;
+  }).join('');
+}
+
+$('historyList').addEventListener('click', e => {
+  const b = e.target.closest('button[data-del]');
+  if (!b || !confirm('Delete this session from your history?')) return;
+  const id = b.dataset.del;
+  fetch(`history?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    .then(async r => { if (!r.ok) throw new Error((await r.text()).trim()); })
+    .then(() => { logged = logged.filter(h => h.id !== id); renderHistory(); })
+    .catch(err => alert(`Couldn't delete it: ${err.message || 'the timer server isn\'t running'}`));
+});
+
 function renderMenu() {
   const colors = { prep: 'var(--prep)', work: 'var(--work)', rest: 'var(--rest)' };
   const run = buildRun();
@@ -607,13 +887,24 @@ function renderMenu() {
   $('plan').innerHTML = schedule.map((p, si) => {
     // The get-ready always runs; otherwise dim what this session skips
     const dim = p.kind !== 'prep' && (si < startAt || (mode === 'round' && si > startAt));
-    const label = `<span class="dot" style="background:${colors[p.kind]}"></span>${escapeHTML(p.name)}`
-      + (si === startAt ? '<span class="here">Start</span>' : '')
-      + `<span class="dur">${fmt(p.seconds)}</span>`;
-    return `<li class="${dim ? 'dim' : ''}">` + (p.kind === 'work'
-      ? `<button type="button" data-si="${si}" title="Start from ${escapeHTML(p.name)}">${label}</button>`
-      : label) + '</li>';
+    const name = escapeHTML(p.name);
+    const label = `<span class="dot" style="background:${colors[p.kind]}"></span>${name}`
+      + (si === startAt ? '<span class="here">Start</span>' : '');
+    if (p.kind === 'work') {
+      return `<li class="${dim ? 'dim' : ''}"><button type="button" data-si="${si}" title="Start from ${name}">`
+        + `${label}<span class="dur">${fmt(p.seconds)}</span></button></li>`;
+    }
+    const changed = p.seconds !== base[si].seconds;
+    return `<li class="${dim ? 'dim' : ''}">${label}<span class="adj">`
+      + `<button type="button" data-adj="${si}" data-d="${-REST_STEP}" aria-label="Shorter ${name}">−</button>`
+      + `<span class="dur${changed ? ' changed' : ''}"${changed ? ` title="Schedule default ${fmt(base[si].seconds)}"` : ''}>${fmt(p.seconds)}</span>`
+      + `<button type="button" data-adj="${si}" data-d="${REST_STEP}" aria-label="Longer ${name}">+</button>`
+      + '</span></li>';
   }).join('') + `<li class="total">This session<span class="dur">${fmt(total)}</span></li>`;
+
+  const anyChanged = Object.keys(customRest()).length > 0;
+  $('hint').innerHTML = 'Click a round to start from it. Use − and + to change rest times.'
+    + (anyChanged ? ' <button type="button" class="link" id="resetRest">Reset to schedule</button>' : '');
 
   $('startBtn').innerHTML = mode === 'round' ? `Start ${startName}`
     : startAt === works[0] ? 'Start' : `Start from ${startName}`;
@@ -633,6 +924,8 @@ function renderMenu() {
 }
 
 $('plan').addEventListener('click', e => {
+  const adj = e.target.closest('button[data-adj]');
+  if (adj) return adjustRest(+adj.dataset.adj, +adj.dataset.d);
   const b = e.target.closest('button[data-si]');
   if (!b) return;
   startAt = +b.dataset.si;
@@ -645,7 +938,15 @@ for (const r of document.querySelectorAll('input[name=mode]')) {
 $('volume').addEventListener('input', e => { volume = +e.target.value; save('volume', volume); applyVolume(); });
 $('voiceToggle').addEventListener('change', e => { voiceOn = e.target.checked; save('voice', voiceOn); });
 $('startBtn').addEventListener('click', start);
-$('nextRoundBtn').addEventListener('click', startNextRound);
+$('hint').addEventListener('click', e => {
+  if (e.target.id !== 'resetRest') return;
+  save('restTimes', null);
+  applyRestTimes();
+  renderMenu();
+});
+$('nextRoundBtn').addEventListener('click', e => { e.currentTarget.blur(); startNextRound(); });
+// Blur so a later Space (pause) or Enter doesn't press it again
+$('giveUpBtn').addEventListener('click', e => { e.currentTarget.blur(); giveUp(); });
 $('testBtn').addEventListener('click', () => {
   initAudio();
   let t = 0;
@@ -653,13 +954,22 @@ $('testBtn').addEventListener('click', () => {
   say('This is the voice.', t);
 });
 
-const getJSON = url => fetch(url).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+const getJSON = url => fetch(url).then(async r => {
+  if (!r.ok) throw new Error((await r.text()).trim() || `HTTP ${r.status}`);
+  return r.json();
+});
 
-Promise.all([getJSON('schedule.json'), getJSON('state').catch(() => ({}))])
-  .then(([s, st]) => {
+Promise.all([
+  getJSON('schedule.json'),
+  getJSON('state').catch(() => ({})),
+  getJSON('history').catch(err => { $('historyError').hidden = false; $('historyError').textContent = `Couldn't read your history: ${err.message}`; return []; }),
+])
+  .then(([s, st, h]) => {
     state = st;
-    schedule = s.phases;
+    logged = h;
+    base = s.phases;
     scheduleId = s.id;
+    applyRestTimes();
     works = schedule.flatMap((p, si) => p.kind === 'work' ? [si] : []);
     voiceOn = load('voice', s.voice !== false);
     $('voiceToggle').checked = voiceOn;
@@ -668,7 +978,12 @@ Promise.all([getJSON('schedule.json'), getJSON('state').catch(() => ({}))])
     mode = load('mode', 'full') === 'round' ? 'round' : 'full';
     document.querySelector(`input[name=mode][value=${mode}]`).checked = true;
     startAt = savedProgress()?.next ?? works[0];
+    // A session still open from last time (tab closed or reloaded mid-session) gets logged now
+    const leftover = load('current', null);
+    if (leftover) { logSession(leftover); save('current', null); }
+    sendUnsaved();
     renderMenu();
+    renderHistory();
     $('startBtn').disabled = false;
     $('startBtn').focus();
   })
